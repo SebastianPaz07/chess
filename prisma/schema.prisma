@@ -1,0 +1,618 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// CORE ENTITIES
+// ============================================
+
+enum Role {
+  PROFESSOR
+  STUDENT
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      Role     @default(STUDENT)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Lichess integration
+  lichessUsername String?
+  lichessUserId   String? @unique
+  lichessToken    String? // encrypted
+  lichessRating   Int?
+  lichessAvatar   String?
+
+  // Relations
+  groupMemberships     GroupMembership[]
+  createdGroups        StudyGroup[]           @relation("CreatedGroups")
+  createdPlans         StudyPlan[]            @relation("CreatedPlans")
+  assignmentSubmissions AssignmentSubmission[]
+  lessonProgress       LessonProgress[]
+  puzzleActivities     PuzzleActivity[]
+  activityLogs         ActivityLog[]
+  studySessions        StudySession[]
+  gameRecords          GameRecord[]
+  gameAnalysisSessions GameAnalysisSession[]
+  bookProgress         BookProgress[]
+  weaknesses           StudentWeakness[]
+  personalizedPlans    StudentPersonalizedPlan[]
+  achievements         UserAchievement[]
+  receivedComments     ProfessorComment[]
+  givenComments        ProfessorComment[]     @relation("GivenComments")
+  progressSnapshots    ProgressSnapshot[]
+
+  @@index([email])
+  @@index([lichessUserId])
+}
+
+model StudyGroup {
+  id               String   @id @default(cuid())
+  name             String
+  description      String?
+  invitationCode   String   @unique
+  maxStudents      Int      @default(30)
+  allowAutoRegister Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relations
+  creatorId       String
+  creator         User              @relation("CreatedGroups", fields: [creatorId], references: [id], onDelete: Cascade)
+  memberships     GroupMembership[]
+  studyPlans      StudyPlan[]
+  tournaments     Tournament[]
+
+  @@index([invitationCode])
+  @@index([creatorId])
+}
+
+model GroupMembership {
+  id        String   @id @default(cuid())
+  joinedAt  DateTime @default(now())
+
+  // Relations
+  userId  String
+  groupId String
+  user    User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group   StudyGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, groupId])
+  @@index([userId])
+  @@index([groupId])
+}
+
+// ============================================
+// STUDY PLANS & LESSONS
+// ============================================
+
+enum StudyPlanType {
+  SEQUENTIAL
+  FLEXIBLE
+}
+
+enum DifficultyLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+model StudyPlan {
+  id              String          @id @default(cuid())
+  title           String
+  description     String?
+  level           DifficultyLevel
+  type            StudyPlanType   @default(SEQUENTIAL)
+  estimatedWeeks  Int?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  // Relations
+  creatorId String
+  groupId   String
+  creator   User          @relation("CreatedPlans", fields: [creatorId], references: [id], onDelete: Cascade)
+  group     StudyGroup    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  modules   StudyModule[]
+
+  @@index([creatorId])
+  @@index([groupId])
+}
+
+model StudyModule {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  order       Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  planId      String
+  plan        StudyPlan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  lessons     Lesson[]
+  assignments Assignment[]
+
+  @@index([planId])
+  @@index([order])
+}
+
+enum LessonType {
+  THEORY
+  VIDEO
+  INTERACTIVE
+  READING
+  PRACTICE
+  BOOK_READING
+  BOOK_EXERCISES
+}
+
+model Lesson {
+  id             String     @id @default(cuid())
+  title          String
+  description    String?
+  type           LessonType
+  content        String?    @db.Text
+  lichessStudyUrl String?
+  videoUrl       String?
+  estimatedMinutes Int?
+  order          Int
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  // Relations
+  moduleId       String
+  bookResourceId String?
+  module         StudyModule      @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  bookResource   BookResource?    @relation(fields: [bookResourceId], references: [id])
+  progress       LessonProgress[]
+
+  @@index([moduleId])
+  @@index([order])
+}
+
+model LessonProgress {
+  id          String    @id @default(cuid())
+  completed   Boolean   @default(false)
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  // Relations
+  userId   String
+  lessonId String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson   Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lessonId])
+  @@index([userId])
+  @@index([lessonId])
+}
+
+// ============================================
+// ASSIGNMENTS & SUBMISSIONS
+// ============================================
+
+enum AssignmentType {
+  PUZZLE
+  GAME_ANALYSIS
+  STUDY_REVIEW
+  TOURNAMENT
+  CUSTOM
+  BOOK_READING
+  BOOK_EXERCISES
+  DAILY_EXERCISES
+  WEEKLY_EXERCISES
+}
+
+enum AssignmentFrequency {
+  ONE_TIME
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+model Assignment {
+  id            String              @id @default(cuid())
+  title         String
+  description   String?             @db.Text
+  type          AssignmentType
+  frequency     AssignmentFrequency @default(ONE_TIME)
+  dueDate       DateTime?
+  points        Int                 @default(100)
+  isPersonalized Boolean            @default(false)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  // Configuration (JSON for flexibility)
+  configuration Json? // { theme, count, ratingMin, ratingMax, etc. }
+
+  // Relations
+  moduleId    String
+  module      StudyModule            @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  submissions AssignmentSubmission[]
+
+  @@index([moduleId])
+  @@index([type])
+}
+
+enum SubmissionStatus {
+  SUBMITTED
+  GRADED
+  NEEDS_REVISION
+}
+
+model AssignmentSubmission {
+  id          String           @id @default(cuid())
+  status      SubmissionStatus @default(SUBMITTED)
+  submittedAt DateTime         @default(now())
+  gradedAt    DateTime?
+  grade       Int?
+  feedback    String?          @db.Text
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  // Submission data (JSON for flexibility)
+  submissionData Json? // { notes, gameIds, pagesRead, exercisesCompleted, etc. }
+
+  // Relations
+  userId       String
+  assignmentId String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([assignmentId])
+  @@index([status])
+}
+
+// ============================================
+// PUZZLES
+// ============================================
+
+model PuzzleActivity {
+  id            String   @id @default(cuid())
+  puzzleId      String
+  theme         String
+  rating        Int
+  solved        Boolean
+  attempts      Int      @default(1)
+  timeSpentSeconds Int
+  createdAt     DateTime @default(now())
+
+  // Error tracking
+  incorrectMoves Json? // Array of incorrect moves
+
+  // Relations
+  userId       String
+  assignmentId String?
+  user         User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  errorLogs    PuzzleErrorLog[]
+
+  @@index([userId])
+  @@index([theme])
+  @@index([solved])
+}
+
+model PuzzleErrorLog {
+  id                String   @id @default(cuid())
+  puzzleId          String
+  studentMove       String
+  correctMove       String
+  errorType         String // "tactical_miss", "calculation_error", etc.
+  createdAt         DateTime @default(now())
+
+  // Relations
+  activityId String
+  activity   PuzzleActivity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  @@index([activityId])
+  @@index([errorType])
+}
+
+// ============================================
+// GAMES
+// ============================================
+
+model GameRecord {
+  id              String    @id @default(cuid())
+  lichessGameId   String    @unique
+  pgn             String    @db.Text
+  result          String
+  playerRating    Int?
+  opponentRating  Int?
+  playerColor     String
+  accuracy        Float?
+  blunders        Int?
+  mistakes        Int?
+  inaccuracies    Int?
+  importedAt      DateTime  @default(now())
+  analyzedAt      DateTime?
+
+  // Analysis data
+  engineAnalysis Json? // Lichess analysis data
+  studentNotes   String? @db.Text
+  professorNotes String? @db.Text
+
+  // Relations
+  userId          String
+  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  analysisSessions GameAnalysisSession[]
+
+  @@index([userId])
+  @@index([lichessGameId])
+}
+
+model GameAnalysisSession {
+  id              String   @id @default(cuid())
+  startedAt       DateTime @default(now())
+  endedAt         DateTime?
+  timeSpentSeconds Int?
+  movesReviewed   Int?
+  notes           String?  @db.Text
+
+  // Relations
+  userId String
+  gameId String
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  game   GameRecord @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([gameId])
+}
+
+// ============================================
+// BOOKS
+// ============================================
+
+enum BookType {
+  READING
+  EXERCISES
+  MIXED
+}
+
+model BookResource {
+  id            String   @id @default(cuid())
+  title         String
+  author        String?
+  bookType      BookType
+  totalPages    Int?
+  totalExercises Int?
+  fileUrl       String
+  uploadedAt    DateTime @default(now())
+
+  // Relations
+  lessons  Lesson[]
+  progress BookProgress[]
+
+  @@index([title])
+}
+
+model BookProgress {
+  id                  String   @id @default(cuid())
+  pagesRead           Int      @default(0)
+  exercisesCompleted  Int      @default(0)
+  weeklyNotes         String?  @db.Text
+  lastUpdated         DateTime @updatedAt
+  createdAt           DateTime @default(now())
+
+  // Relations
+  userId String
+  bookId String
+  user   User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book   BookResource @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, bookId])
+  @@index([userId])
+  @@index([bookId])
+}
+
+// ============================================
+// ACTIVITY TRACKING
+// ============================================
+
+enum ActivityType {
+  LOGIN
+  LOGOUT
+  LESSON_STARTED
+  LESSON_COMPLETED
+  PUZZLE_SOLVED
+  PUZZLE_FAILED
+  GAME_ANALYZED
+  PAGE_READ
+  EXERCISE_COMPLETED
+  ASSIGNMENT_SUBMITTED
+}
+
+model ActivityLog {
+  id        String       @id @default(cuid())
+  type      ActivityType
+  metadata  Json? // Flexible data per activity type
+  createdAt DateTime     @default(now())
+
+  // Relations
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+model StudySession {
+  id              String    @id @default(cuid())
+  startedAt       DateTime  @default(now())
+  endedAt         DateTime?
+  totalMinutes    Int?
+  activitiesCount Int       @default(0)
+
+  // Relations
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([startedAt])
+}
+
+model ProgressSnapshot {
+  id                  String   @id @default(cuid())
+  weekNumber          Int
+  year                Int
+  puzzlesSolved       Int      @default(0)
+  gamesPlayed         Int      @default(0)
+  rating              Int?
+  totalMinutesStudied Int      @default(0)
+  weaknessesDetected  Json? // Array of weakness types
+  createdAt           DateTime @default(now())
+
+  // Relations
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, year, weekNumber])
+  @@index([userId])
+}
+
+// ============================================
+// ANALYSIS & INTELLIGENCE
+// ============================================
+
+model StudentWeakness {
+  id             String   @id @default(cuid())
+  weaknessType   String // "endgame_rook", "tactical_pins", etc.
+  theme          String?
+  occurrences    Int      @default(1)
+  lastOccurrence DateTime @default(now())
+  resolved       Boolean  @default(false)
+  resolvedAt     DateTime?
+  createdAt      DateTime @default(now())
+
+  // Relations
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  personalizedPlans StudentPersonalizedPlan[]
+
+  @@index([userId])
+  @@index([weaknessType])
+  @@index([resolved])
+}
+
+model StudentPersonalizedPlan {
+  id          String   @id @default(cuid())
+  title       String
+  description String?  @db.Text
+  reason      String? // Why this plan was created
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  userId      String
+  weaknessId  String?
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  weakness    StudentWeakness? @relation(fields: [weaknessId], references: [id])
+
+  @@index([userId])
+  @@index([active])
+}
+
+// ============================================
+// SOCIAL & GAMIFICATION
+// ============================================
+
+enum TournamentType {
+  ARENA
+  SWISS
+  ROUND_ROBIN
+}
+
+enum TournamentStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+}
+
+model Tournament {
+  id              String           @id @default(cuid())
+  title           String
+  description     String?          @db.Text
+  tournamentType  TournamentType
+  status          TournamentStatus @default(SCHEDULED)
+  lichessTournamentId String?      @unique
+  scheduledAt     DateTime
+  startedAt       DateTime?
+  endedAt         DateTime?
+  maxParticipants Int?
+  createdAt       DateTime         @default(now())
+
+  // Relations
+  groupId String
+  group   StudyGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@index([groupId])
+  @@index([status])
+}
+
+model Achievement {
+  id          String   @id @default(cuid())
+  key         String   @unique // "first_week", "50_puzzles", etc.
+  name        String
+  description String
+  iconUrl     String?
+  category    String // "puzzles", "games", "study", "social"
+  points      Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  // Relations
+  users UserAchievement[]
+
+  @@index([category])
+}
+
+model UserAchievement {
+  id          String   @id @default(cuid())
+  unlockedAt  DateTime @default(now())
+
+  // Relations
+  userId        String
+  achievementId String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+  @@index([userId])
+}
+
+model ProfessorComment {
+  id        String   @id @default(cuid())
+  content   String   @db.Text
+  context   String // "assignment", "game", "lesson", etc.
+  contextId String // ID of the related entity
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Reply system
+  parentId String?
+  parent   ProfessorComment?  @relation("CommentReplies", fields: [parentId], references: [id])
+  replies  ProfessorComment[] @relation("CommentReplies")
+
+  // Relations
+  professorId String
+  studentId   String
+  professor   User   @relation("GivenComments", fields: [professorId], references: [id], onDelete: Cascade)
+  student     User   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([professorId])
+  @@index([studentId])
+  @@index([context, contextId])
+}
